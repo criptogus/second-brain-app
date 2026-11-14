@@ -1,6 +1,6 @@
 {
   "name": "keepmind",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "KeepMind — open-source installable second brain. Connects your apps, remembers everything, learns while you sleep.",
   "license": "MIT",
   "main": "./out/main/index.js",
@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "dist": "electron-vite build && electron-builder",
     "test": "vitest run",
+    "check:update-manifests": "node scripts/check-update-manifests.mjs",
     "check:release-gates": "node scripts/check-release-gates.mjs",
     "corp": "node corp/server.mjs",
     "corp:build-brain": "vite build --config vite.corp.config.mts",

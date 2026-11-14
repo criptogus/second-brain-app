@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.7] - unreleased
+
+Release date will be set at publish time.
+
+### Fixed
+- Align update-manifest URLs with uploaded asset filenames for KeepMind and Corp on macOS and Windows (#16).
+- Guard both editions with real electron-builder macro expansion for macOS DMG/ZIP and Windows NSIS names, plus post-build exact filename, size and SHA-512 manifest validation.
+
+### Release preparation notes
+- Includes `2869b3e` (#16, "fix: align Windows installer names with update manifests"); both builder configs define explicit `artifactName` for macOS, NSIS and Linux.
+- Both desktop editions use the root package version 0.2.7. The Corp server version (`corp/lib.mjs`, 0.8.0) and the standalone MCP package (`tools/package.json`, 0.1.1) are versioned separately and stay unchanged.
+
 ### Added
 - Project continuity in the desktop app, native chat and bundled MCP: versioned objectives, decisions, alternatives, attempts, artifacts, expected/observed outcomes and questions.
 - Evidence digests, changed/unavailable source checks, dependent artifact impacts, human review history and usefulness feedback.
