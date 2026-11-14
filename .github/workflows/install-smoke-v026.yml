@@ -1,0 +1,316 @@
+name: Install smoke v0.2.6 (macOS/Windows)
+'on':
+  push:
+    branches:
+    - test/v026-install-smoke-1411
+permissions:
+  contents: read
+concurrency:
+  group: install-smoke-v026-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+        - macos-latest
+        - windows-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+    - name: Checkout smoke scripts
+      id: checkout
+      uses: actions/checkout@v4
+      with:
+        sparse-checkout: tests/install-smoke
+        sparse-checkout-cone-mode: false
+    - name: Prepare output
+      id: prepare
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force "out/$env:RUNNER_OS", "$env:RUNNER_TEMP/km-download/main", "$env:RUNNER_TEMP/km-download/corp" | Out-Null
+        "SMOKE_OUT=$((Resolve-Path "out/$env:RUNNER_OS").Path)" >> $env:GITHUB_ENV
+        "DOWNLOAD=$env:RUNNER_TEMP/km-download" >> $env:GITHUB_ENV
+    - name: Download published main v0.2.6 assets
+      id: download_main
+      if: always()
+      env:
+        GH_TOKEN: ${{ github.token }}
+      timeout-minutes: 5
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $mac = $env:RUNNER_OS -eq 'macOS'
+        $asset = if ($mac) { 'KeepMind-0.2.6-universal.dmg' } else { 'KeepMind.Setup.0.2.6.exe' }
+        $manifest = if ($mac) { 'latest-mac.yml' } else { 'latest.yml' }
+        gh release download v0.2.6 --repo criptogus/keepmind -p $asset -p $manifest --dir "$env:DOWNLOAD/main"
+        if ($LASTEXITCODE) { throw 'main release download failed' }
+    - name: Download published corp v0.2.6 assets
+      id: download_corp
+      if: always()
+      env:
+        GH_TOKEN: ${{ github.token }}
+      timeout-minutes: 5
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $mac = $env:RUNNER_OS -eq 'macOS'
+        $asset = if ($mac) { 'KeepMind.Corp-0.2.6-arm64.dmg' } else { 'KeepMind.Corp.Setup.0.2.6.exe' }
+        $manifest = if ($mac) { 'latest-mac.yml' } else { 'latest.yml' }
+        gh release download corp-v0.2.6 --repo criptogus/keepmind -p $asset -p $manifest --dir "$env:DOWNLOAD/corp"
+        if ($LASTEXITCODE) { throw 'corp release download failed' }
+    - name: Verify release SHA512 and sizes; record manifest findings
+      id: verify
+      if: always()
+      timeout-minutes: 3
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $checks = @(); $findings = @()
+        foreach ($edition in @('main','corp')) {
+          $dir = "$env:DOWNLOAD/$edition"
+          $asset = Get-ChildItem $dir -File | Where-Object { $_.Extension -in @('.dmg','.exe') } | Select-Object -First 1
+          try {
+            if (!$asset) { throw 'Downloaded installer missing' }
+            $manifest = Get-ChildItem $dir -Filter '*.yml' | Select-Object -First 1
+            $text = Get-Content $manifest.FullName -Raw
+            # electron-builder files entries: url, sha512, size. Ignore top-level legacy hash.
+            $entries = [regex]::Matches($text, '(?ms)^\s*- url:\s*([^\r\n]+)\r?\n(?:(?!^\s*- url:).)*?^\s+sha512:\s*([^\r\n]+)\r?\n\s+size:\s*(\d+)')
+            $hex = (Get-FileHash -LiteralPath $asset.FullName -Algorithm SHA512).Hash
+            $bytes = [byte[]]::new($hex.Length / 2)
+            for ($i=0; $i -lt $bytes.Length; $i++) { $bytes[$i] = [Convert]::ToByte($hex.Substring($i*2,2),16) }
+            $hash = [Convert]::ToBase64String($bytes)
+            $match = @($entries | Where-Object { $_.Groups[2].Value.Trim().Trim('"',"'") -eq $hash -and [long]$_.Groups[3].Value -eq $asset.Length })
+            if (!$match.Count) { throw 'No files entry matches BOTH size and SHA512' }
+            $url = $match[0].Groups[1].Value.Trim().Trim('"',"'")
+            $detail = "$($asset.Name): size=$($asset.Length), sha512=$hash, manifest url=$url"
+            if ($url -ne $asset.Name) { $findings += @{ name='auto-update manifest name mismatch'; edition=$edition; asset=$asset.Name; manifest=$url }; $detail += '; auto-update manifest name mismatch' }
+            $checks += @{ name="$edition release integrity"; ok=$true; detail=$detail }
+            Copy-Item $manifest.FullName "$env:SMOKE_OUT/$edition-manifest.yml"
+            # Installation is gated per edition on successful integrity verification.
+            "VERIFIED_$($edition.ToUpper())=$($asset.FullName)" >> $env:GITHUB_ENV
+          } catch { $checks += @{name="$edition release integrity";ok=$false;detail="$($_.Exception.Message)"} }
+        }
+        @{checks=$checks;findings=$findings} | ConvertTo-Json -Depth 8 | Set-Content "$env:SMOKE_OUT/integrity-result.json"
+        if ($checks.ok -contains $false) { throw 'Release integrity failed' }
+    - name: Install KeepMind on macOS
+      id: install_main_mac
+      if: always() && runner.os == 'macOS'
+      timeout-minutes: 4
+      shell: bash
+      run: |
+        set -euo pipefail
+        [[ "$(uname -m)" == arm64 ]] || { echo 'Expected arm64 runner'; exit 1; }
+        : "${VERIFIED_MAIN:?Installer integrity not verified}"
+        mount="$RUNNER_TEMP/km-mount-main"
+        mkdir -p "$mount"
+        hdiutil attach "$VERIFIED_MAIN" -nobrowse -mountpoint "$mount"
+        trap 'hdiutil detach "$mount" || true' EXIT
+        app=$(find "$mount" -maxdepth 1 -name '*.app' -type d -print -quit)
+        [[ -n "$app" ]]
+        ditto "$app" '/Applications/KeepMind.app'
+        hdiutil detach "$mount"
+        trap - EXIT
+        xattr -dr com.apple.quarantine '/Applications/KeepMind.app' || true
+        spctl --assess --verbose=4 '/Applications/KeepMind.app' > "$SMOKE_OUT/main-spctl.log" 2>&1 || true
+        codesign -dv --verbose=4 '/Applications/KeepMind.app' > "$SMOKE_OUT/main-codesign.log" 2>&1 || true
+        ls -la '/Applications/KeepMind.app/Contents/MacOS'
+        binary=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' '/Applications/KeepMind.app/Contents/Info.plist')
+        printf '%s\n' "MAIN_EXE=/Applications/KeepMind.app/Contents/MacOS/$binary" "MAIN_RES=/Applications/KeepMind.app/Contents/Resources" >> "$GITHUB_ENV"
+    - name: Install KeepMind on Windows
+      id: install_main_win
+      if: always() && runner.os == 'Windows'
+      timeout-minutes: 5
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if (!$env:VERIFIED_MAIN) { throw 'Installer integrity not verified' }
+        $p = Start-Process -FilePath $env:VERIFIED_MAIN -ArgumentList '/S' -PassThru
+        if (!$p.WaitForExit(180000)) { Stop-Process -Id $p.Id -Force; throw 'Installer timeout' }
+        if ($p.ExitCode -ne 0) { throw "Installer failed: $($p.ExitCode)" }
+        $roots = @("$env:LOCALAPPDATA/Programs", $env:ProgramFiles, ${env:ProgramFiles(x86)}) | Where-Object { $_ -and (Test-Path $_) }
+        $found = @($roots | ForEach-Object { Get-ChildItem -LiteralPath $_ -Recurse -File -Filter 'KeepMind.exe' -ErrorAction SilentlyContinue })
+        $found.FullName | Tee-Object -FilePath "$env:SMOKE_OUT/main-installed-paths.log"
+        $binary = $found | Where-Object { Test-Path (Join-Path $_.DirectoryName 'resources/app.asar') } | Select-Object -First 1
+        if (!$binary) { throw 'Installed executable with app.asar not found' }
+        $uninstallers = @(Get-ChildItem -LiteralPath $binary.DirectoryName -Filter '*Uninstall*.exe' -File)
+        $uninstallers.FullName | Set-Content "$env:SMOKE_OUT/main-uninstallers.log"
+        if (!$uninstallers.Count) { throw 'NSIS uninstaller missing' }
+        "MAIN_EXE=$($binary.FullName)" >> $env:GITHUB_ENV
+        "MAIN_RES=$(Join-Path $binary.DirectoryName 'resources')" >> $env:GITHUB_ENV
+    - name: Launch KeepMind GUI and scan native errors
+      id: gui_main
+      if: always()
+      timeout-minutes: 2
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+        if (!$env:MAIN_EXE) { throw 'Installed executable unavailable' }
+        $p = Start-Process -FilePath $env:MAIN_EXE -PassThru -RedirectStandardOutput "$env:SMOKE_OUT/main-gui-stdout.log" -RedirectStandardError "$env:SMOKE_OUT/main-gui-stderr.log"
+        try {
+          Start-Sleep -Seconds 35
+          $p.Refresh()
+          if ($p.HasExited) { throw "GUI exited early: $($p.ExitCode)" }
+          # Screenshot failure is informational and must not prevent log checks/cleanup.
+          try {
+            if ($env:RUNNER_OS -eq 'macOS') {
+              screencapture -x "$env:SMOKE_OUT/mac-keepmind.png"
+              if ($LASTEXITCODE) { throw 'screencapture failed' }
+            } else {
+              Add-Type -AssemblyName System.Windows.Forms
+              Add-Type -AssemblyName System.Drawing
+              $bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+              $bitmap = [System.Drawing.Bitmap]::new($bounds.Width,$bounds.Height)
+              $g = [System.Drawing.Graphics]::FromImage($bitmap)
+              try { $g.CopyFromScreen($bounds.Left,$bounds.Top,0,0,$bitmap.Size); $bitmap.Save("$env:SMOKE_OUT/windows-main.png") } finally { $g.Dispose(); $bitmap.Dispose() }
+            }
+          } catch { "Screenshot unavailable: $_" | Set-Content "$env:SMOKE_OUT/main-screenshot.log" }
+          $errors = Select-String -Path "$env:SMOKE_OUT/main-gui-*.log" -Pattern 'NODE_MODULE_VERSION|was compiled against a different|ERR_DLOPEN|Cannot find module|dlopen|Error: The module'
+          if ($errors) { $errors | Out-String | Write-Host; throw 'Native/module error in GUI logs' }
+        } finally {
+          if ($env:RUNNER_OS -eq 'Windows') { taskkill /PID $p.Id /T /F 2>$null | Out-Null; $global:LASTEXITCODE = 0 }
+          else { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+        }
+    - name: 'Test installed KeepMind: vault, crypto, CLI and stdio MCP'
+      id: test_main
+      if: always()
+      timeout-minutes: 7
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if (!$env:MAIN_EXE) { throw 'Installed executable unavailable' }
+        $env:ELECTRON_RUN_AS_NODE = '1'
+        try {
+          & $env:MAIN_EXE tests/install-smoke/vault-smoke.cjs --resources $env:MAIN_RES --exe $env:MAIN_EXE --out "$env:SMOKE_OUT/main"
+          if ($LASTEXITCODE -ne 0) { throw 'Installed binary smoke test failed' }
+        } finally { Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue }
+    - name: Install KeepMind Corp on macOS
+      id: install_corp_mac
+      if: always() && runner.os == 'macOS'
+      timeout-minutes: 4
+      shell: bash
+      run: |
+        set -euo pipefail
+        [[ "$(uname -m)" == arm64 ]] || { echo 'Expected arm64 runner'; exit 1; }
+        : "${VERIFIED_CORP:?Installer integrity not verified}"
+        mount="$RUNNER_TEMP/km-mount-corp"
+        mkdir -p "$mount"
+        hdiutil attach "$VERIFIED_CORP" -nobrowse -mountpoint "$mount"
+        trap 'hdiutil detach "$mount" || true' EXIT
+        app=$(find "$mount" -maxdepth 1 -name '*.app' -type d -print -quit)
+        [[ -n "$app" ]]
+        ditto "$app" '/Applications/KeepMind Corp.app'
+        hdiutil detach "$mount"
+        trap - EXIT
+        xattr -dr com.apple.quarantine '/Applications/KeepMind Corp.app' || true
+        spctl --assess --verbose=4 '/Applications/KeepMind Corp.app' > "$SMOKE_OUT/corp-spctl.log" 2>&1 || true
+        codesign -dv --verbose=4 '/Applications/KeepMind Corp.app' > "$SMOKE_OUT/corp-codesign.log" 2>&1 || true
+        ls -la '/Applications/KeepMind Corp.app/Contents/MacOS'
+        binary=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' '/Applications/KeepMind Corp.app/Contents/Info.plist')
+        printf '%s\n' "CORP_EXE=/Applications/KeepMind Corp.app/Contents/MacOS/$binary" "CORP_RES=/Applications/KeepMind Corp.app/Contents/Resources" >> "$GITHUB_ENV"
+    - name: Install KeepMind Corp on Windows
+      id: install_corp_win
+      if: always() && runner.os == 'Windows'
+      timeout-minutes: 5
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if (!$env:VERIFIED_CORP) { throw 'Installer integrity not verified' }
+        $p = Start-Process -FilePath $env:VERIFIED_CORP -ArgumentList '/S' -PassThru
+        if (!$p.WaitForExit(180000)) { Stop-Process -Id $p.Id -Force; throw 'Installer timeout' }
+        if ($p.ExitCode -ne 0) { throw "Installer failed: $($p.ExitCode)" }
+        $roots = @("$env:LOCALAPPDATA/Programs", $env:ProgramFiles, ${env:ProgramFiles(x86)}) | Where-Object { $_ -and (Test-Path $_) }
+        $found = @($roots | ForEach-Object { Get-ChildItem -LiteralPath $_ -Recurse -File -Filter 'KeepMind Corp.exe' -ErrorAction SilentlyContinue })
+        $found.FullName | Tee-Object -FilePath "$env:SMOKE_OUT/corp-installed-paths.log"
+        $binary = $found | Where-Object { Test-Path (Join-Path $_.DirectoryName 'resources/app.asar') } | Select-Object -First 1
+        if (!$binary) { throw 'Installed executable with app.asar not found' }
+        $uninstallers = @(Get-ChildItem -LiteralPath $binary.DirectoryName -Filter '*Uninstall*.exe' -File)
+        $uninstallers.FullName | Set-Content "$env:SMOKE_OUT/corp-uninstallers.log"
+        if (!$uninstallers.Count) { throw 'NSIS uninstaller missing' }
+        "CORP_EXE=$($binary.FullName)" >> $env:GITHUB_ENV
+        "CORP_RES=$(Join-Path $binary.DirectoryName 'resources')" >> $env:GITHUB_ENV
+    - name: Launch KeepMind Corp GUI and scan native errors
+      id: gui_corp
+      if: always()
+      timeout-minutes: 2
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+        if (!$env:CORP_EXE) { throw 'Installed executable unavailable' }
+        $p = Start-Process -FilePath $env:CORP_EXE -PassThru -RedirectStandardOutput "$env:SMOKE_OUT/corp-gui-stdout.log" -RedirectStandardError "$env:SMOKE_OUT/corp-gui-stderr.log"
+        try {
+          Start-Sleep -Seconds 35
+          $p.Refresh()
+          if ($p.HasExited) { throw "GUI exited early: $($p.ExitCode)" }
+          # Screenshot failure is informational and must not prevent log checks/cleanup.
+          try {
+            if ($env:RUNNER_OS -eq 'macOS') {
+              screencapture -x "$env:SMOKE_OUT/mac-keepmind-corp.png"
+              if ($LASTEXITCODE) { throw 'screencapture failed' }
+            } else {
+              Add-Type -AssemblyName System.Windows.Forms
+              Add-Type -AssemblyName System.Drawing
+              $bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+              $bitmap = [System.Drawing.Bitmap]::new($bounds.Width,$bounds.Height)
+              $g = [System.Drawing.Graphics]::FromImage($bitmap)
+              try { $g.CopyFromScreen($bounds.Left,$bounds.Top,0,0,$bitmap.Size); $bitmap.Save("$env:SMOKE_OUT/windows-corp.png") } finally { $g.Dispose(); $bitmap.Dispose() }
+            }
+          } catch { "Screenshot unavailable: $_" | Set-Content "$env:SMOKE_OUT/corp-screenshot.log" }
+          $errors = Select-String -Path "$env:SMOKE_OUT/corp-gui-*.log" -Pattern 'NODE_MODULE_VERSION|was compiled against a different|ERR_DLOPEN|Cannot find module|dlopen|Error: The module'
+          if ($errors) { $errors | Out-String | Write-Host; throw 'Native/module error in GUI logs' }
+        } finally {
+          if ($env:RUNNER_OS -eq 'Windows') { taskkill /PID $p.Id /T /F 2>$null | Out-Null; $global:LASTEXITCODE = 0 }
+          else { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+        }
+    - name: 'Test installed KeepMind Corp: selfcheck and HTTP MCP'
+      id: test_corp
+      if: always()
+      timeout-minutes: 7
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if (!$env:CORP_EXE) { throw 'Installed executable unavailable' }
+        $env:ELECTRON_RUN_AS_NODE = '1'
+        try {
+          & $env:CORP_EXE tests/install-smoke/corp-smoke.mjs --resources $env:CORP_RES --exe $env:CORP_EXE --out "$env:SMOKE_OUT/corp"
+          if ($LASTEXITCODE -ne 0) { throw 'Installed binary smoke test failed' }
+        } finally { Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue }
+    - name: Write JSON and GitHub summary; enforce all results
+      id: summary
+      env:
+        PHASES: ${{ toJSON(steps) }}
+      if: always()
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        New-Item -ItemType Directory -Force "out/$env:RUNNER_OS" | Out-Null
+        $root = (Resolve-Path "out/$env:RUNNER_OS").Path
+        $checks = @()
+        $phases = $env:PHASES | ConvertFrom-Json
+        foreach ($phase in $phases.PSObject.Properties) {
+          if ($phase.Value.outcome -ne 'skipped') { $checks += @{name=$phase.Name;ok=($phase.Value.outcome -eq 'success');detail=$phase.Value.outcome} }
+        }
+        foreach ($file in @('integrity-result.json','main/vault-result.json','corp/corp-result.json')) {
+          $full = Join-Path $root $file
+          if (Test-Path $full) { $r = Get-Content $full -Raw | ConvertFrom-Json; $checks += $r.checks }
+          else { $checks += @{name=$file;ok=$false;detail='Missing report (preceding phase failed or timed out)'} }
+        }
+        @{os=$env:RUNNER_OS;arch=$env:RUNNER_ARCH;checks=$checks} | ConvertTo-Json -Depth 12 | Set-Content "$root/summary.json"
+        '| Check | Pass/fail | Detail |' >> $env:GITHUB_STEP_SUMMARY
+        '| --- | --- | --- |' >> $env:GITHUB_STEP_SUMMARY
+        foreach ($c in $checks) {
+          $status = if ($c.skipped) {'SKIP'} elseif ($c.ok) {'PASS'} else {'FAIL'}
+          $detail = ([string]$c.detail).Replace('|','\|').Replace("`r",'').Replace("`n",'<br>')
+          "| $($c.name) | $status | $detail |" >> $env:GITHUB_STEP_SUMMARY
+        }
+        if ($checks.ok -contains $false) { throw 'One or more install smoke checks failed' }
+    - name: Upload smoke evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: install-smoke-${{ matrix.os }}
+        path: out/
+        if-no-files-found: warn
