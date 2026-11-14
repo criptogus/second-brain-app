@@ -13,6 +13,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Shared native/MCP persistence and permission tests, encrypted classification inheritance, context budgets, path-alias regressions and renderer DOM interaction coverage. Installed desktop visual inspection remains outstanding.
 
 ### Changed
+- Docs: clarify unsigned-app first launch on macOS 15+, macOS 14 and Windows across installation help, the app, landing page and reusable release notes; identify the separate KeepMind Corp installer and release repository.
 - Chat, lexical retrieval, RAG and standalone MCP share current/history/as-of fact selection. Every retrieved fact fragment retains its status label; corrections refresh the index before the next query.
 - The MCP bundle now includes `lib/memory-contract.mjs` and `lib/continuity.mjs`; packaging and native materialization include both modules.
 - Hoje calls the existing word-presence evaluation “Retrieval checks” to distinguish it from model-answer accuracy.

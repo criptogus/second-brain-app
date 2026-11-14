@@ -109,7 +109,7 @@ Tag no repositório dispara build nos três sistemas:
 git tag corp-v0.1.0 && git push origin corp-v0.1.0
 ```
 
-Artefatos ficam na **GitHub Release** ligada à tag (workflow `release-corp.yml`).
+Artefatos ficam na **GitHub Release** ligada à tag (workflow `release-corp.yml`). O KeepMind Corp tem instalador separado e release própria (por exemplo, `corp-v0.2.6`). Na branch `main`, `electron-builder.corp.yml` configura a publicação em `criptogus/keepmind-corp`. A release estável atual é a [corp-v0.2.6](https://github.com/criptogus/keepmind/releases/tag/corp-v0.2.6), neste repositório; builds posteriores ficam nos [releases do keepmind-corp](https://github.com/criptogus/keepmind-corp/releases). Consulte também e as [instruções de instalação e primeira abertura](../docs/INSTALL.md).
 
 ## Armazenamento cifrado do CRM Corp
 
