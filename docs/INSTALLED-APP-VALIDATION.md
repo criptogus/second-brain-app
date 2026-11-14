@@ -16,7 +16,7 @@ The old `continuous.yml` used the personal packaging configuration even inside `
 
 Downloads require the expected repository, edition-specific filename, positive size and SHA-256 digest. Partial or corrupted downloads are not installable. Pending metadata persists across restart. The macOS helper stages the replacement on the installation volume, keeps the old bundle for recovery, and preserves the profile when launching directly. It does not use LaunchServices to choose another app. Linux requires a real AppImage path and stages a replacement. Windows waits for the old process, installs to its existing directory, checks the installer exit status, then relaunches with the same profile. A receipt is written after replacement, not after download.
 
-These changes do not add signing/notarization or remote account recovery. Existing unsigned application restrictions still apply. A local source-package smoke is not evidence that a published release contains the fix.
+These changes do not add signing/notarization or remote account recovery. Builds are not code-signed yet. On macOS 15 or later, open the app once, then go to System Settings > Privacy & Security and choose Open Anyway. On macOS 14 or earlier, you can also right-click the app and choose Open. On Windows, choose More info, then Run anyway. A local source-package smoke is not evidence that a published release contains the fix.
 
 ## Reusable tests
 

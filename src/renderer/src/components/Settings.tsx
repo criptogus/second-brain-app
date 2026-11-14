@@ -687,6 +687,9 @@ function UpdatesCard({ onToast }: { onToast: Props['onToast'] }) {
       <p style={{ fontSize: 12.5, marginBottom: state === 'downloading' ? 8 : 12, color: state === 'ready' ? 'var(--lime)' : state === 'error' ? 'var(--red)' : 'var(--text)' }}>
         {label[state] ?? label.idle}
       </p>
+      <p className="faint" style={{ fontSize: 12.5, lineHeight: 1.6, marginBottom: 12 }}>
+        {'Builds are not code-signed yet. On macOS 15 or later, open the app once, then go to System Settings > Privacy & Security and choose Open Anyway. On macOS 14 or earlier, you can also right-click the app and choose Open. On Windows, choose More info, then Run anyway.'}
+      </p>
       {state === 'downloading' && pct != null && (
         <div className="progress-bar" style={{ marginBottom: 12 }}>
           <div style={{ width: `${pct}%` }} />

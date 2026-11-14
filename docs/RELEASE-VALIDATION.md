@@ -16,4 +16,6 @@ CI retains smoke reports and screenshots for 14 days, including failed runs when
 
 Run `npm run check:release-gates` for the aggregate structural check (nonzero on failure). Run the CI commands for execution evidence, then `node scripts/check-release-gates.mjs --reports`. See `.agents/skills/release-validation/SKILL.md` for the reusable validation procedure. Neither command publishes anything. Static mutation tests validate the checker, not GitHub's scheduler. A real tagged release is deliberately not part of PR validation.
 
+For release notes, paste the [unsigned-app first-launch snippet](RELEASE-NOTES-UNSIGNED.md). See [installation help](INSTALL.md) for the separate personal and Corp downloads.
+
 References: [reusable workflows](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows), [workflow syntax and job dependencies](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax).
