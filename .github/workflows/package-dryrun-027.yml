@@ -1,0 +1,85 @@
+name: Package 0.2.7 dry run
+on:
+  push:
+    branches: [test/0.2.7-package-dryrun-1411]
+permissions:
+  contents: read
+jobs:
+  package:
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        edition: [personal, corp]
+        os: [macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: npm ci
+      - run: npm run typecheck
+      - if: matrix.edition == 'corp'
+        run: npm run corp:build-brain
+      - if: matrix.edition == 'corp'
+        run: npm run corp:check
+      - if: matrix.edition == 'corp'
+        run: npx electron-vite build
+        env:
+          KEEPMIND_EDITION: corp
+      - if: matrix.edition == 'personal'
+        run: npm run build
+      - name: Prune onnxruntime
+        run: node scripts/prune-onnxruntime.mjs ${{ runner.os == 'macOS' && 'darwin' || 'win32' }}
+      - name: Drop optional ws natives
+        run: node -e "const fs=require('fs'); for (const p of ['node_modules/bufferutil','node_modules/utf-8-validate']) fs.rmSync(p,{recursive:true,force:true})"
+      - name: Build installers without publishing
+        run: |
+          cfg=electron-builder.yml
+          if [[ '${{ matrix.edition }}' == corp ]]; then cfg=electron-builder.corp.yml; fi
+          if [[ '${{ runner.os }}' == macOS ]]; then
+            if [[ '${{ matrix.edition }}' == personal ]]; then
+              npx electron-builder --config "$cfg" --mac dmg zip --universal --publish never
+            else
+              npx electron-builder --config "$cfg" --mac dmg zip --publish never
+            fi
+          else
+            npx electron-builder --config "$cfg" --win nsis --x64 --arm64 --publish never
+          fi
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Verify update manifests
+        run: node scripts/check-update-manifests.mjs ${{ matrix.edition == 'corp' && 'dist-corp' || 'dist' }}
+      - name: Inspect macOS signature (informational)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        run: |
+          dir='${{ matrix.edition == 'corp' && 'dist-corp' || 'dist' }}'
+          found=0
+          status=0
+          while IFS= read -r -d '' app; do
+            found=1
+            codesign --verify --deep --strict --verbose=2 "$app" || status=1
+          done < <(find "$dir" -name '*.app' -type d -prune -print0)
+          [[ "$found" == 1 ]] || exit 1
+          exit "$status"
+      - name: Record artifact filenames and sizes
+        if: always()
+        run: |
+          node --input-type=module -e "import fs from 'node:fs'; const dir='${{ matrix.edition == 'corp' && 'dist-corp' || 'dist' }}'; fs.mkdirSync(dir,{recursive:true}); const rows=fs.readdirSync(dir,{withFileTypes:true}).filter(e=>e.isFile()).map(e=>({name:e.name,size:fs.statSync(dir+'/'+e.name).size})); fs.writeFileSync(dir+'/file-listing.json',JSON.stringify(rows,null,2)+'\n');"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: manifests-${{ matrix.edition }}-${{ matrix.os }}
+          path: |
+            ${{ matrix.edition == 'corp' && 'dist-corp' || 'dist' }}/latest*.yml
+            ${{ matrix.edition == 'corp' && 'dist-corp' || 'dist' }}/file-listing.json
+          if-no-files-found: error
