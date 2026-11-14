@@ -183,7 +183,7 @@ jobs:
         if (!$env:MAIN_EXE) { throw 'Installed executable unavailable' }
         $env:ELECTRON_RUN_AS_NODE = '1'
         try {
-          & $env:MAIN_EXE tests/install-smoke/vault-smoke.cjs --resources $env:MAIN_RES --exe $env:MAIN_EXE --out "$env:SMOKE_OUT/main"
+          & $env:MAIN_EXE tests/install-smoke/vault-smoke.cjs --resources $env:MAIN_RES --exe $env:MAIN_EXE --out "$env:SMOKE_OUT/main" | Out-Host
           if ($LASTEXITCODE -ne 0) { throw 'Installed binary smoke test failed' }
         } finally { Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue }
     - name: Install KeepMind Corp on macOS
@@ -275,7 +275,7 @@ jobs:
         if (!$env:CORP_EXE) { throw 'Installed executable unavailable' }
         $env:ELECTRON_RUN_AS_NODE = '1'
         try {
-          & $env:CORP_EXE tests/install-smoke/corp-smoke.mjs --resources $env:CORP_RES --exe $env:CORP_EXE --out "$env:SMOKE_OUT/corp"
+          & $env:CORP_EXE tests/install-smoke/corp-smoke.mjs --resources $env:CORP_RES --exe $env:CORP_EXE --out "$env:SMOKE_OUT/corp" | Out-Host
           if ($LASTEXITCODE -ne 0) { throw 'Installed binary smoke test failed' }
         } finally { Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue }
     - name: Write JSON and GitHub summary; enforce all results
